@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import * as React from "react";
 import { useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import Solver from "javascript-lp-solver";
 import {
   BarChart3,
@@ -110,6 +109,57 @@ function numberValue(value: unknown) {
 function parseDate(value: unknown) {
   const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseCsvRows(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? "";
+    if (inQuotes) {
+      if (char === "\"") {
+        if (text[index + 1] === "\"") {
+          cell += "\"";
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      inQuotes = true;
+      continue;
+    }
+    if (char === ",") {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if (char === "\n") {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    if (char !== "\r") cell += char;
+  }
+  row.push(cell);
+  rows.push(row);
+  const headers = (rows.shift() ?? []).map((header) => header.trim());
+  if (!headers.length || !headers[0]) throw new Error("The selected file has no readable CSV header row.");
+  return rows
+    .filter((currentRow) => currentRow.some((value) => value.trim() !== ""))
+    .map((currentRow) => {
+      const output: RawRow = {};
+      for (let i = 0; i < headers.length; i += 1) output[headers[i] ?? ""] = currentRow[i] ?? "";
+      return output;
+    });
 }
 
 function cleanTransactions(rows: RawRow[]) {
@@ -243,10 +293,9 @@ function RetailOptimizer() {
   async function handleBuffer(buffer: ArrayBuffer, sourceName: string) {
     setError("");
     try {
-      const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-      const sheet = workbook.Sheets[workbook.SheetNames[0] ?? ""];
-      if (!sheet) throw new Error("The selected file has no readable worksheet.");
-      const rows = XLSX.utils.sheet_to_json<RawRow>(sheet, { defval: "" });
+      const extension = sourceName.split(".").pop()?.toLowerCase();
+      if (extension === "xlsx" || extension === "xls") throw new Error("XLS/XLSX uploads are currently disabled. Please upload a CSV file.");
+      const rows = parseCsvRows(new TextDecoder().decode(new Uint8Array(buffer)));
       const missing = REQUIRED_COLUMNS.filter((column) => !rows.some((row) => Object.prototype.hasOwnProperty.call(row, column)));
       if (missing.length) throw new Error(`Missing required columns: ${missing.join(", ")}`);
       const cleaned = cleanTransactions(rows);
@@ -282,7 +331,7 @@ function RetailOptimizer() {
         </aside>
         <main className="min-w-0 flex-1">
           <header className="flex min-h-14 items-center justify-between border-b border-zinc-200 bg-card px-5 py-3 lg:px-8"><div className="flex items-center gap-3"><PanelLeft className="size-4 text-zinc-400 lg:hidden" /><span className="text-xs font-medium text-zinc-500">Main / <span className="text-zinc-900">{page}</span></span></div><div className="flex items-center gap-3"><span className="hidden font-mono text-[10px] uppercase tracking-wider text-zinc-400 sm:inline">Retail decision support</span><Button variant="outline" size="sm" onClick={() => inputRef.current?.click()}><Upload />Upload data</Button></div></header>
-          <input ref={inputRef} className="hidden" type="file" accept=".csv,.xlsx,.xls" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file); }} />
+          <input ref={inputRef} className="hidden" type="file" accept=".csv" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleFile(file); }} />
           <div className="mx-auto max-w-7xl space-y-8 p-5 lg:p-8">
             <div className="lg:hidden"><div className="mb-3 flex gap-1 overflow-x-auto pb-1">{navItems.map(({ id, icon: Icon }) => <Button key={id} variant="ghost" size="sm" onClick={() => setPage(id)} className={page === id ? "bg-zinc-900 text-primary-foreground hover:bg-zinc-800 hover:text-primary-foreground" : "text-zinc-500"}><Icon />{id}</Button>)}</div></div>
             {error && <div className="flex items-start gap-3 rounded-md border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive"><CircleAlert className="mt-0.5 size-4 shrink-0" /><span>{error}</span></div>}
@@ -309,7 +358,7 @@ function DashboardView({ data, fileName, stats, onUpload, onSample }: { data: Cl
 }
 
 function InventoryView({ data, products, fileName, onUpload, tierBase, setTierBase, modifiers, setModifiers, packCap, setPackCap, costRatio, setCostRatio, topN, setTopN }: { data: CleanRow[] | null; products: Product[]; fileName: string; onUpload: () => void; tierBase: TierBase; setTierBase: React.Dispatch<React.SetStateAction<TierBase>>; modifiers: SizeModifiers; setModifiers: React.Dispatch<React.SetStateAction<SizeModifiers>>; packCap: number; setPackCap: (value: number) => void; costRatio: number; setCostRatio: (value: number) => void; topN: number; setTopN: (value: number) => void }) {
-  if (!data) return <EmptyPage title="Inventory" description="Upload the retail transaction CSV or XLSX file to build the product-level catalog." onUpload={onUpload} />;
+  if (!data) return <EmptyPage title="Inventory" description="Upload the retail transaction CSV file to build the product-level catalog." onUpload={onUpload} />;
   return <><PageIntro eyebrow="Data source" title="Inventory" description={`${fileName} · ${data.length.toLocaleString()} cleaned transaction rows`} /><div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_300px]"><section className="min-w-0 space-y-4"><SectionHeading icon={Box} title="Product catalog" meta={`Top ${products.length} by historical revenue`} /><div className="overflow-x-auto rounded-lg border border-zinc-200 bg-card"><table className="w-full min-w-[980px] text-left text-xs"><thead className="border-b border-zinc-200 bg-zinc-100 font-mono uppercase tracking-wider text-zinc-500"><tr>{["StockCode", "Description", "Unit Price", "Cost", "Margin", "Demand", "Storage / Unit", "Size Tier", "Revenue", "Orders"].map((heading) => <th key={heading} className="px-3 py-3 font-medium">{heading}</th>)}</tr></thead><tbody className="divide-y divide-zinc-100">{products.map((product) => <tr key={product.StockCode} className="hover:bg-accent-blue/40"><td className="whitespace-nowrap px-3 py-3 font-mono text-zinc-500">{product.StockCode}</td><td className="max-w-72 px-3 py-3 font-medium">{product.Description}</td><td className="whitespace-nowrap px-3 py-3">{money(product.unit_price)}</td><td className="whitespace-nowrap px-3 py-3">{money(product.cost)}</td><td className="whitespace-nowrap px-3 py-3">{money(product.margin)}</td><td className="whitespace-nowrap px-3 py-3">{product.demand.toLocaleString()}</td><td className="whitespace-nowrap px-3 py-3">{decimal(product.storage_unit)}</td><td className="px-3 py-3 capitalize">{product.storage_tier}</td><td className="whitespace-nowrap px-3 py-3">{money(product.revenue)}</td><td className="px-3 py-3">{product.orders.toLocaleString()}</td></tr>)}</tbody></table></div></section><StorageConfig tierBase={tierBase} setTierBase={setTierBase} modifiers={modifiers} setModifiers={setModifiers} packCap={packCap} setPackCap={setPackCap} costRatio={costRatio} setCostRatio={setCostRatio} topN={topN} setTopN={setTopN} /></div></>;
 }
 
@@ -330,7 +379,7 @@ function StorageConfig({ tierBase, setTierBase, modifiers, setModifiers, packCap
 function StorageOverview() { return <section className="border-t border-zinc-200 pt-8"><div className="grid gap-6 md:grid-cols-[190px_1fr]"><div><h2 className="text-xs font-semibold uppercase tracking-wider">Storage config</h2><p className="mt-2 text-xs leading-relaxed text-zinc-500">Editable rules for tier-based storage sizing and unit multipliers.</p></div><div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{Object.entries(TIER_BASE_DEFAULTS).map(([tier, value]) => <div key={tier} className="rounded border border-zinc-200 bg-zinc-100 p-3"><span className="block font-mono text-[10px] uppercase text-zinc-400">{tier} tier</span><span className="mt-1 block font-mono text-sm">{value.toFixed(1)}</span></div>)}</div></div></section>; }
 function PageIntro({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) { return <section><div className="mb-3 font-mono text-[11px] uppercase tracking-[0.18em] text-zinc-500">{eyebrow}</div><h1 className="text-3xl font-medium tracking-tight">{title}</h1><p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-500">{description}</p></section>; }
 function SectionHeading({ icon: Icon, title, meta }: { icon: typeof LineChart; title: string; meta?: string }) { return <div className="flex items-center justify-between gap-4"><div className="flex items-center gap-2"><Icon className="size-4 text-zinc-400" /><h2 className="text-sm font-semibold">{title}</h2></div>{meta && <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-400">{meta}</span>}</div>; }
-function EmptyPage({ title, description, onUpload }: { title: string; description: string; onUpload?: () => void }) { return <><PageIntro eyebrow="Data source required" title={title} description={description} /><div className="rounded-xl border border-dashed border-zinc-300 bg-card p-16 text-center"><FileSpreadsheet className="mx-auto mb-4 size-7 text-zinc-400" /><p className="text-sm font-medium">Upload transaction data to begin</p><p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-zinc-500">The required schema is InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, and Country.</p>{onUpload && <Button className="mt-6" onClick={onUpload}><Upload />Select CSV / XLSX file</Button>}</div></>; }
+function EmptyPage({ title, description, onUpload }: { title: string; description: string; onUpload?: () => void }) { return <><PageIntro eyebrow="Data source required" title={title} description={description} /><div className="rounded-xl border border-dashed border-zinc-300 bg-card p-16 text-center"><FileSpreadsheet className="mx-auto mb-4 size-7 text-zinc-400" /><p className="text-sm font-medium">Upload transaction data to begin</p><p className="mx-auto mt-2 max-w-sm text-xs leading-relaxed text-zinc-500">The required schema is InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, and Country.</p>{onUpload && <Button className="mt-6" onClick={onUpload}><Upload />Select CSV file</Button>}</div></>; }
 function Stat({ label, value, tone }: { label: string; value: string; tone?: "blue" | "green" }) { return <div className={`bg-card p-4 ${tone === "blue" ? "bg-accent-blue" : tone === "green" ? "bg-accent-green" : ""}`}><div className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">{label}</div><div className="mt-1 text-lg font-medium tracking-tight">{value}</div></div>; }
 function ModelCard({ label, title, type, description, lines, tone }: { label: string; title: string; type: string; description: string; lines: string[]; tone: "blue" | "green" }) { return <div className={`space-y-6 bg-card p-7 ${tone === "blue" ? "bg-accent-blue/40" : "bg-accent-green/40"}`}><div className="flex items-center justify-between gap-4"><span className="rounded bg-zinc-100 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-zinc-600">{label}</span><span className="text-right text-xs text-zinc-400">{type}</span></div><div><h2 className="text-lg font-medium">{title}</h2><p className="mt-2 max-w-lg text-sm leading-relaxed text-zinc-500">{description}</p></div><div className="space-y-3 border-t border-zinc-200/70 pt-4">{lines.map((line) => <div key={line} className="flex justify-between gap-4 text-xs"><span className="text-zinc-500">{line.startsWith("Maximize") ? "Objective" : line.startsWith("y") ? "Variable" : "Constraint"}</span><span className="font-mono text-right text-zinc-900">{line}</span></div>)}</div></div>; }
 function Field({ label, value, onChange, prefix, suffix, step = 100 }: { label: string; value: number; onChange: (value: number) => void; prefix?: string; suffix?: string; step?: number }) { return <label className="block space-y-2"><span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">{label}</span><div className="flex h-9 items-center rounded-md border border-zinc-200 bg-card px-3 focus-within:ring-1 focus-within:ring-ring">{prefix && <span className="mr-2 text-xs text-zinc-400">{prefix}</span>}<input className="min-w-0 flex-1 bg-transparent text-sm outline-none" type="number" min="0" step={step} value={value} onChange={(event) => onChange(numberValue(event.target.value))} />{suffix && <span className="ml-2 text-xs text-zinc-400">{suffix}</span>}</div></label>; }

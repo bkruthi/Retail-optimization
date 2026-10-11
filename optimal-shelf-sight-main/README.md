@@ -4,7 +4,7 @@ A polished React/TanStack UI for the **Smart Retail Product & Inventory Optimiza
 
 ## What is included
 
-- CSV / XLSX / XLS transaction upload
+- CSV transaction upload
 - Bundled UCI Online Retail sample dataset
 - Transaction cleaning and validation
 - Product-level aggregation by StockCode
